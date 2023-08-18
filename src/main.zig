@@ -53,7 +53,7 @@ pub const Mason = struct {
         self.get(div).deinit(self.ally);
         self.blox.del(div.ref);
     }
-    
+
     /// create a spacer
     pub fn newSpacer(
         self: *Self,
@@ -103,7 +103,6 @@ test "basic-preformatted" {
         \\
     ;
     const div = try mason.newPre(text);
-    
     try expectDiv(&mason, text, div);
 
     // ensure attrs

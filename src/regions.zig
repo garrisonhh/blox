@@ -24,7 +24,7 @@ const Dimensions = struct {
 /// baked FormattedText.
 pub const Region = union(Kind) {
     const Self = @This();
-    
+
     pub const Error = Allocator.Error || Codepoint.ParseError;
 
     spacer: Dimensions,
@@ -182,7 +182,7 @@ pub const FormattedText = struct {
                 // middle line
                 const start_cp = self.starts[self.index - 1];
                 const stop_cp = self.starts[self.index];
-                return self.mem[start_cp .. stop_cp];
+                return self.mem[start_cp..stop_cp];
             }
         }
     };

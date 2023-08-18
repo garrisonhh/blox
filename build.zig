@@ -11,13 +11,13 @@ pub fn build(b: *std.Build) void {
     });
 
     // tests
-	const tests = b.addTest(.{
-		.root_source_file = .{ .path = "src/main.zig" },
-	});
+    const tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/main.zig" },
+    });
     tests.addModule("common", common);
 
-	const run_tests = b.addRunArtifact(tests);
-	const test_step = b.step("test", "run blox tests");
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "run blox tests");
 
-	test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_tests.step);
 }
