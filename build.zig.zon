@@ -1,0 +1,10 @@
+.{
+    .name = "blox",
+    .version = "0.0.0",
+    .dependencies = .{
+        .zighh = .{
+            .url = "https://github.com/garrisonhh/zighh/tarball/master",
+            .hash = "12200cfe8165585104db8fc1992c04afb632843dea9eef5902d1e384af12bcaf5423",
+        },
+    },
+}
