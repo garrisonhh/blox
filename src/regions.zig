@@ -6,6 +6,8 @@ const Codepoint = utf8.Codepoint;
 
 /// different types of divs
 pub const Kind = enum {
+    /// spacing
+    spacer,
     /// preformatted text
     pre,
 
@@ -18,47 +20,48 @@ const Dimensions = struct {
     height: usize,
 };
 
-/// the underlying implementation of a div
+/// the underlying implementation of a div. intermediary between raw text and
+/// baked FormattedText.
 pub const Region = union(Kind) {
     const Self = @This();
     
     pub const Error = Allocator.Error || Codepoint.ParseError;
 
+    spacer: Dimensions,
     pre: FormattedText,
 
     pub fn deinit(self: Self, ally: Allocator) void {
         switch (self) {
-            inline else => |x| x.deinit(ally),
+            .spacer => {},
+            .pre => |ft| ft.deinit(ally),
         }
     }
 
-    pub fn newPre(
+    /// convert this div to an owned formatted text object
+    /// (this also allows regions to be printed)
+    pub fn bake(
+        self: *const Self,
         ally: Allocator,
-        text: []const u8,
-    ) (Allocator.Error || Codepoint.ParseError)!Self {
-        return Self{ .pre = try FormattedText.fromPreformatted(ally, text) };
+    ) Error!FormattedText {
+        return switch (self.*) {
+            .spacer => |dims| try FormattedText.fromSpacer(ally, dims),
+            .pre => |ft| try ft.clone(ally),
+        };
     }
 
-    pub fn format(
-        self: Self,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        switch (self) {
-            .pre => |ft| {
-                var lines = ft.lines();
-                var first = true;
-                while (lines.next()) |line| : (first = false) {
-                    if (!first) try writer.writeByte('\n');
-                    for (line) |c| try c.format("", .{}, writer);
-                }
-            },
-        }
+    pub fn newSpacer(width: usize, height: usize) Self {
+        return Self{ .spacer = .{ .width = width, .height = height } };
+    }
+
+    pub fn newPre(ally: Allocator, text: []const u8) Error!Self {
+        return Self{ .pre = try FormattedText.fromPreformatted(ally, text) };
     }
 };
 
-const FormattedText = struct {
+/// essentially the target final form of text in blox. all the ways you
+/// manipulate divs and regions result in producing a FormattedText object which
+/// you can use for whatever purposes.
+pub const FormattedText = struct {
     const Self = @This();
 
     mem: []const Codepoint,
@@ -67,26 +70,29 @@ const FormattedText = struct {
     starts: []const usize,
     dims: Dimensions,
 
-    fn deinit(self: Self, ally: Allocator) void {
+    pub fn deinit(self: Self, ally: Allocator) void {
         ally.free(self.mem);
         ally.free(self.starts);
     }
 
-    fn calcDims(mem: []const Codepoint, starts: []const usize) Dimensions {
-        var max_width: usize = 0;
-        var line_iter = LineIterator.init(mem, starts);
-        while (line_iter.next()) |line| {
-            var line_width: usize = 0;
-            for (line) |c| {
-                line_width += c.printedWidth();
-            }
+    pub fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+        return Self{
+            .mem = try ally.dupe(Codepoint, self.mem),
+            .starts = try ally.dupe(usize, self.starts),
+            .dims = self.dims,
+        };
+    }
 
-            max_width = @max(max_width, line_width);
-        }
+    /// bake a spacer
+    fn fromSpacer(ally: Allocator, dims: Dimensions) Allocator.Error!Self {
+        const mem = try ally.alloc(Codepoint, 0);
+        const starts = try ally.alloc(usize, dims.height - 1);
+        @memset(starts, 0);
 
-        return Dimensions{
-            .width = max_width,
-            .height = starts.len + 1,
+        return Self{
+            .mem = mem,
+            .starts = starts,
+            .dims = dims,
         };
     }
 
@@ -118,6 +124,24 @@ const FormattedText = struct {
             .mem = frozen_mem,
             .starts = frozen_starts,
             .dims = calcDims(frozen_mem, frozen_starts),
+        };
+    }
+
+    fn calcDims(mem: []const Codepoint, starts: []const usize) Dimensions {
+        var max_width: usize = 0;
+        var line_iter = LineIterator.init(mem, starts);
+        while (line_iter.next()) |line| {
+            var line_width: usize = 0;
+            for (line) |c| {
+                line_width += c.printedWidth();
+            }
+
+            max_width = @max(max_width, line_width);
+        }
+
+        return Dimensions{
+            .width = max_width,
+            .height = starts.len + 1,
         };
     }
 
@@ -155,10 +179,25 @@ const FormattedText = struct {
                 // last line
                 return self.mem[self.starts[self.starts.len - 1]..];
             } else {
+                // middle line
                 const start_cp = self.starts[self.index - 1];
                 const stop_cp = self.starts[self.index];
                 return self.mem[start_cp .. stop_cp];
             }
         }
     };
+
+    pub fn format(
+        self: Self,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        var line_iter = self.lines();
+        var first = true;
+        while (line_iter.next()) |line| : (first = false) {
+            if (!first) try writer.writeByte('\n');
+            for (line) |c| try c.format("", .{}, writer);
+        }
+    }
 };
