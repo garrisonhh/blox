@@ -1,9 +1,6 @@
-const impl = @import("impl.zig");
-
 comptime {
-    @import("std").testing.refAllDecls(impl);
+    @import("std").testing.refAllDecls(@This());
 }
 
-pub const Error = impl.Error;
-pub const Div = impl.Div;
-pub const Mason = impl.Mason;
+pub usingnamespace @import("impl.zig");
+pub usingnamespace @import("char.zig");

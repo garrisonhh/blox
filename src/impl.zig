@@ -3,6 +3,9 @@ const Allocator = std.mem.Allocator;
 const com = @import("common");
 const utf8 = com.utf8;
 const Codepoint = utf8.Codepoint;
+const char = @import("char.zig");
+const Char = char.Char;
+const Color = char.Color;
 
 const ref_bits = 32;
 const BloxRef = com.Ref(.blox_block, ref_bits);
@@ -50,13 +53,14 @@ pub const Mason = struct {
         self: *Self,
         width: usize,
         height: usize,
+        opts: TextOptions,
     ) Allocator.Error!Div {
-        return try self.put(try Region.newSpacer(width, height));
+        return try self.put(Region.newSpacer(width, height, opts));
     }
 
     /// create a preformatted div
-    pub fn newPre(self: *Self, text: []const u8) Error!Div {
-        return try self.put(try Region.newPre(self.ally, text));
+    pub fn newPre(self: *Self, text: []const u8, opts: TextOptions) Error!Div {
+        return try self.put(try Region.newPre(self.ally, text, opts));
     }
 
     /// create a container
@@ -64,18 +68,51 @@ pub const Mason = struct {
         return try self.put(try Region.newBox(self, divs, opts));
     }
 
+    pub const WriteOptions = struct {
+        enable_colors: bool = true,
+        print_final_newline: bool = true,
+    };
+
     /// write a div to a writer
     pub fn write(
         self: *const Self,
         div: Div,
         writer: anytype,
+        comptime opts: WriteOptions,
     ) (Error || @TypeOf(writer).Error)!void {
+        const Writer = @TypeOf(writer);
+
+        // configuration
+        const printch = comptime switch (opts.enable_colors) {
+            true => struct {
+                fn f(ch: Char, w: Writer) Writer.Error!void {
+                    try w.print("{}", .{ch});
+                }
+            }.f,
+            false => struct {
+                fn f(ch: Char, w: Writer) Writer.Error!void {
+                    try w.print("{}", .{ch.c});
+                }
+            }.f,
+        };
+
+        // bake and iterate over lines to print
         const baked = try self.get(div).bake(self);
         defer baked.deinit(self.ally);
 
-        try writer.print("{}", .{baked});
+        var lines = baked.lines();
+        var first = true;
+        while (lines.next()) |line| : (first = false) {
+            if (!first) try printch(Char.newline, writer);
+            for (line) |ch| try printch(ch, writer);
+        }
+
+        if (opts.print_final_newline) {
+            try printch(Char.newline, writer);
+        }
     }
 };
+
 
 /// a reference to a block of text
 pub const Div = packed struct(std.meta.Int(.unsigned, ref_bits)) {
@@ -116,6 +153,11 @@ pub const BoxOptions = struct {
     alignment: Alignment = .inner,
 };
 
+pub const TextOptions = struct {
+    fg: Color = Char.default_fg,
+    bg: Color = Char.default_bg,
+};
+
 const UVec2 = @Vector(2, usize);
 const IVec2 = @Vector(2, isize);
 
@@ -124,7 +166,7 @@ const IVec2 = @Vector(2, isize);
 pub const Region = union(Kind) {
     const Self = @This();
 
-    spacer: UVec2,
+    spacer: Spacer,
     pre: FormattedText,
     box: Box,
 
@@ -138,8 +180,7 @@ pub const Region = union(Kind) {
 
     fn getDims(self: Self) UVec2 {
         return switch (self) {
-            .spacer => |x| x,
-            inline .pre, .box => |x| x.dims,
+            inline else => |x| x.dims
         };
     }
 
@@ -150,18 +191,33 @@ pub const Region = union(Kind) {
         mason: *const Mason,
     ) Error!FormattedText {
         return switch (self.*) {
-            .spacer => |dims| try FormattedText.initSpacer(mason.ally, dims),
+            .spacer => |s| try FormattedText.initSpacer(mason.ally, s),
             .pre => |ft| try ft.clone(mason.ally),
             .box => |box| try box.bake(mason),
         };
     }
 
-    pub fn newSpacer(width: usize, height: usize) Self {
-        return Self{ .spacer = .{ .width = width, .height = height } };
+    pub fn newSpacer(
+        width: usize,
+        height: usize,
+        opts: TextOptions,
+    ) Self {
+        return Self{
+            .spacer = Spacer{
+                .opts = opts,
+                .dims = .{width, height},
+            },
+        };
     }
 
-    pub fn newPre(ally: Allocator, text: []const u8) Error!Self {
-        return Self{ .pre = try FormattedText.initPreformatted(ally, text) };
+    pub fn newPre(
+        ally: Allocator,
+        text: []const u8,
+        opts: TextOptions,
+    ) Error!Self {
+        return Self{
+            .pre = try FormattedText.initPreformatted(ally, text, opts),
+        };
     }
 
     pub fn newBox(
@@ -171,6 +227,12 @@ pub const Region = union(Kind) {
     ) Allocator.Error!Self {
         return Self{ .box = try Box.init(mason, divs, opts) };
     }
+};
+
+/// used to structure divs
+const Spacer = struct {
+    opts: TextOptions,
+    dims: UVec2,
 };
 
 /// a container of other divs
@@ -228,7 +290,7 @@ const Box = struct {
     }
 
     fn bake(self: Self, mason: *const Mason) Error!FormattedText {
-        const canvas = try FormattedText.initEmptyRect(mason.ally, self.dims);
+        const canvas = try FormattedText.initEmpty(mason.ally, self.dims);
 
         switch (self.opts.direction) {
             inline else => |dir| {
@@ -296,7 +358,7 @@ const Box = struct {
 const FormattedText = struct {
     const Self = @This();
 
-    mem: []Codepoint,
+    mem: []Char,
     /// indices into mem where each line starts, excluding line 0 (which always
     /// starts at 0)
     starts: []const usize,
@@ -309,16 +371,15 @@ const FormattedText = struct {
 
     fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return Self{
-            .mem = try ally.dupe(Codepoint, self.mem),
+            .mem = try ally.dupe(Char, self.mem),
             .starts = try ally.dupe(usize, self.starts),
             .dims = self.dims,
         };
     }
 
-    /// makes an empty rectangle filled with space characters
-    fn initEmptyRect(ally: Allocator, dims: UVec2) Allocator.Error!Self {
-        const mem = try ally.alloc(Codepoint, dims[0] * dims[1]);
-        @memset(mem, Codepoint.ct(" "));
+    fn initFill(ally: Allocator, dims: UVec2, ch: Char) Allocator.Error!Self {
+        const mem = try ally.alloc(Char, dims[0] * dims[1]);
+        @memset(mem, ch);
 
         const starts = try ally.alloc(usize, dims[1] - 1);
         for (starts, 1..dims[1]) |*slot, count| {
@@ -332,26 +393,28 @@ const FormattedText = struct {
         };
     }
 
-    /// make a spacer
-    fn initSpacer(ally: Allocator, dims: UVec2) Allocator.Error!Self {
-        const mem = try ally.alloc(Codepoint, 0);
-        const starts = try ally.alloc(usize, dims[1] - 1);
-        @memset(starts, 0);
+    /// makes an empty rectangle
+    fn initEmpty(ally: Allocator, dims: UVec2) Allocator.Error!Self {
+        return initFill(ally, dims, Char.empty);
+    }
 
-        return Self{
-            .mem = mem,
-            .starts = starts,
-            .dims = dims,
-        };
+    /// make a spacer
+    fn initSpacer(ally: Allocator, spacer: Spacer) Allocator.Error!Self {
+        return initFill(ally, spacer.dims, Char{
+            .fg = spacer.opts.fg,
+            .bg = spacer.opts.bg,
+            .c = Char.empty.c,
+        });
     }
 
     /// directly translates string into FormattedText
     fn initPreformatted(
         ally: Allocator,
         text: []const u8,
+        opts: TextOptions,
     ) (Allocator.Error || Codepoint.ParseError)!Self {
         // collect lines
-        var mem = std.ArrayListUnmanaged(Codepoint){};
+        var mem = std.ArrayListUnmanaged(Char){};
         defer mem.deinit(ally);
         var starts = std.ArrayListUnmanaged(usize){};
         defer starts.deinit(ally);
@@ -361,7 +424,11 @@ const FormattedText = struct {
             if (c.eql(Codepoint.ct("\n"))) {
                 try starts.append(ally, mem.items.len);
             } else {
-                try mem.append(ally, c);
+                try mem.append(ally, Char{
+                    .fg = opts.fg,
+                    .bg = opts.bg,
+                    .c = c,
+                });
             }
         }
 
@@ -377,13 +444,13 @@ const FormattedText = struct {
     }
 
     /// helper for init functions
-    fn calcDims(mem: []Codepoint, starts: []const usize) UVec2 {
+    fn calcDims(mem: []Char, starts: []const usize) UVec2 {
         var max_width: usize = 0;
         var line_iter = LineIterator.init(mem, starts);
         while (line_iter.next()) |line| {
             var line_width: usize = 0;
-            for (line) |c| {
-                line_width += c.printedWidth();
+            for (line) |ch| {
+                line_width += ch.c.printedWidth();
             }
 
             max_width = @max(max_width, line_width);
@@ -433,16 +500,11 @@ const FormattedText = struct {
         }
     }
 
-    /// iterate over the lines of text
-    fn lines(self: Self) LineIterator {
-        return LineIterator.init(self.mem, self.starts);
-    }
-
     fn getLineImpl(
-        mem: []Codepoint,
+        mem: []Char,
         starts: []const usize,
         index: usize,
-    ) []Codepoint {
+    ) []Char {
         std.debug.assert(index <= starts.len);
 
         if (index == 0) {
@@ -463,23 +525,28 @@ const FormattedText = struct {
         }
     }
 
-    fn getLine(self: Self, index: usize) []Codepoint {
+    fn getLine(self: Self, index: usize) []Char {
         return getLineImpl(self.mem, self.starts, index);
     }
 
+    /// iterate over the lines of text
+    fn lines(self: Self) LineIterator {
+        return LineIterator.init(self.mem, self.starts);
+    }
+
     const LineIterator = struct {
-        mem: []Codepoint,
+        mem: []Char,
         starts: []const usize,
         index: usize = 0,
 
-        fn init(mem: []Codepoint, starts: []const usize) LineIterator {
+        fn init(mem: []Char, starts: []const usize) LineIterator {
             return LineIterator{
                 .mem = mem,
                 .starts = starts,
             };
         }
 
-        fn next(self: *LineIterator) ?[]const Codepoint {
+        fn next(self: *LineIterator) ?[]const Char {
             if (self.index > self.starts.len) {
                 return null;
             }
@@ -488,20 +555,6 @@ const FormattedText = struct {
             return getLineImpl(self.mem, self.starts, self.index);
         }
     };
-
-    pub fn format(
-        self: Self,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        var line_iter = self.lines();
-        var first = true;
-        while (line_iter.next()) |line| : (first = false) {
-            if (!first) try writer.writeByte('\n');
-            for (line) |c| try c.format("", .{}, writer);
-        }
-    }
 };
 
 // tests =======================================================================
@@ -587,7 +640,10 @@ fn expectDiv(mason: *Mason, expected: []const u8, div: Div) !void {
     defer buf.deinit();
 
     const writer = buf.writer();
-    try mason.write(div, writer);
+    try mason.write(div, writer, .{
+        .enable_colors = false,
+        .print_final_newline = false,
+    });
 
     try std.testing.expectEqualStrings(expected, buf.items);
 }
@@ -603,7 +659,7 @@ test "preformatted" {
         \\    !!!
         \\
     ;
-    const div = try mason.newPre(text);
+    const div = try mason.newPre(text, .{});
     try expectDiv(&mason, text, div);
 
     // ensure attrs
@@ -623,9 +679,9 @@ test "box" {
     const text2 = "world!";
     const expected = "hello, world!";
 
-    const div0 = try mason.newPre(text0);
-    const div1 = try mason.newPre(text1);
-    const div2 = try mason.newPre(text2);
+    const div0 = try mason.newPre(text0, .{});
+    const div1 = try mason.newPre(text1, .{});
+    const div2 = try mason.newPre(text2, .{});
     const box = try mason.newBox(&.{ div0, div1, div2 }, .{
         .direction = .right,
     });
