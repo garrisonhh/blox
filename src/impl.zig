@@ -154,8 +154,8 @@ pub const BoxOptions = struct {
 };
 
 pub const TextOptions = struct {
-    fg: Color = Char.default_fg,
-    bg: Color = Char.default_bg,
+    fg: Color = Color.init(.normal, .default),
+    bg: Color = Color.init(.normal, .default),
 };
 
 const UVec2 = @Vector(2, usize);

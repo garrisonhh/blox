@@ -3,7 +3,7 @@ const com = @import("common");
 const Codepoint = com.utf8.Codepoint;
 
 /// represents a terminal color code
-pub const Color = packed struct(u4) {
+pub const Color = packed struct(u5) {
     const Self = @This();
 
     pub const Brightness = enum(u1) {
@@ -11,15 +11,16 @@ pub const Color = packed struct(u4) {
         bright,
     };
 
-    pub const Basic = enum(u3) {
-        black,
-        red,
-        green,
-        yellow,
-        blue,
-        magenta,
-        cyan,
-        white,
+    pub const Basic = enum(u4) {
+        black = 0,
+        red = 1,
+        green = 2,
+        yellow = 3,
+        blue = 4,
+        magenta = 5,
+        cyan = 6,
+        white = 7,
+        default = 9,
     };
 
     brightness: Brightness,
@@ -49,6 +50,20 @@ pub const Color = packed struct(u4) {
 
         return @intFromEnum(self.color) + layer_offset + brightness_offset;
     }
+
+    pub fn format(
+        self: Self,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        switch (self.brightness) {
+            .normal => {},
+            .bright => try writer.writeAll("bright "),
+        }
+
+        try writer.print("{s}", .{@tagName(self.color)});
+    }
 };
 
 const char_bits = @bitSizeOf(Codepoint) + 2 * @bitSizeOf(Color);
@@ -60,22 +75,11 @@ comptime {
 pub const Char = packed struct(std.meta.Int(.unsigned, char_bits)) {
     const Self = @This();
 
-    pub const default_fg = Color.init(.normal, .white);
-    pub const default_bg = Color.init(.normal, .black);
+    pub const empty = Self{ .c = Codepoint.ct(" ") };
+    pub const newline = Self{ .c = Codepoint.ct("\n") };
 
-    pub const empty = Self{
-        .fg = default_fg,
-        .bg = default_bg,
-        .c = Codepoint.ct(" "),
-    };
-    pub const newline = Self{
-        .fg = default_fg,
-        .bg = default_bg,
-        .c = Codepoint.ct("\n"),
-    };
-
-    fg: Color,
-    bg: Color,
+    fg: Color = Color.init(.normal, .default),
+    bg: Color = Color.init(.normal, .default),
     c: Codepoint,
 
     pub fn format(
