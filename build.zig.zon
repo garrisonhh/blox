@@ -3,8 +3,8 @@
     .version = "0.0.0",
     .dependencies = .{
         .zighh = .{
-            .url = "https://github.com/garrisonhh/zighh/tarball/master",
-            .hash = "12200cfe8165585104db8fc1992c04afb632843dea9eef5902d1e384af12bcaf5423",
+            .url = "https://github.com/garrisonhh/zighh/tarball/4b59b5d298fc6b0e8938504640424cab38e40aab",
+            .hash = "1220b11c0494e4ac481d38602c88c0000adc6aad3b9790300964591fa08cf24dde39",
         },
     },
 }
