@@ -68,6 +68,7 @@ pub const Mason = struct {
         return try self.put(try Region.newBox(self, divs, opts));
     }
 
+    // TODO should I make this a part of init() rather than write()?
     pub const WriteOptions = struct {
         enable_colors: bool = true,
         print_final_newline: bool = true,
@@ -86,11 +87,13 @@ pub const Mason = struct {
         const printch = comptime switch (opts.enable_colors) {
             true => struct {
                 fn f(ch: Char, w: Writer) Writer.Error!void {
+                    // print the Char
                     try w.print("{}", .{ch});
                 }
             }.f,
             false => struct {
                 fn f(ch: Char, w: Writer) Writer.Error!void {
+                    // print the Codepoint directly
                     try w.print("{}", .{ch.c});
                 }
             }.f,
@@ -381,10 +384,14 @@ const FormattedText = struct {
         const mem = try ally.alloc(Char, dims[0] * dims[1]);
         @memset(mem, ch);
 
-        const starts = try ally.alloc(usize, dims[1] - 1);
-        for (starts, 1..dims[1]) |*slot, count| {
-            slot.* = count * dims[0];
-        }
+        const starts: []const usize = if (dims[1] == 0) &.{} else b: {
+            const starts = try ally.alloc(usize, dims[1] - 1);
+            for (starts, 1..dims[1]) |*slot, count| {
+                slot.* = count * dims[0];
+            }
+
+            break :b starts;
+        };
 
         return Self{
             .mem = mem,
