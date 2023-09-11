@@ -31,6 +31,10 @@ pub const Mason = struct {
         self.blox.deinit(self.ally);
     }
 
+    pub fn getSize(self: *const Self, div: Div) UVec2 {
+        return self.get(div).getDims();
+    }
+
     fn put(self: *Self, region: Region) Allocator.Error!Div {
         const ref = try self.blox.put(self.ally, region);
         return Div{ .ref = ref };
@@ -116,7 +120,6 @@ pub const Mason = struct {
     }
 };
 
-
 /// a reference to a block of text
 pub const Div = packed struct(std.meta.Int(.unsigned, ref_bits)) {
     const Self = @This();
@@ -166,7 +169,7 @@ const IVec2 = @Vector(2, isize);
 
 /// the underlying implementation of a div. intermediary between raw text and
 /// baked FormattedText.
-pub const Region = union(Kind) {
+const Region = union(Kind) {
     const Self = @This();
 
     spacer: Spacer,
@@ -183,13 +186,13 @@ pub const Region = union(Kind) {
 
     fn getDims(self: Self) UVec2 {
         return switch (self) {
-            inline else => |x| x.dims
+            inline else => |x| x.dims,
         };
     }
 
     /// convert this div to an owned formatted text object
     /// (this also allows regions to be printed)
-    pub fn bake(
+    fn bake(
         self: *const Self,
         mason: *const Mason,
     ) Error!FormattedText {
@@ -200,7 +203,7 @@ pub const Region = union(Kind) {
         };
     }
 
-    pub fn newSpacer(
+    fn newSpacer(
         width: usize,
         height: usize,
         opts: TextOptions,
@@ -208,12 +211,12 @@ pub const Region = union(Kind) {
         return Self{
             .spacer = Spacer{
                 .opts = opts,
-                .dims = .{width, height},
+                .dims = .{ width, height },
             },
         };
     }
 
-    pub fn newPre(
+    fn newPre(
         ally: Allocator,
         text: []const u8,
         opts: TextOptions,
@@ -223,7 +226,7 @@ pub const Region = union(Kind) {
         };
     }
 
-    pub fn newBox(
+    fn newBox(
         mason: *const Mason,
         divs: []const Div,
         opts: BoxOptions,
