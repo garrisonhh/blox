@@ -84,7 +84,7 @@ pub const Mason = struct {
         div: Div,
         writer: anytype,
         comptime opts: WriteOptions,
-    ) (Error || @TypeOf(writer).Error)!void {
+    ) (Allocator.Error || @TypeOf(writer).Error)!void {
         const Writer = @TypeOf(writer);
 
         // configuration
@@ -117,6 +117,49 @@ pub const Mason = struct {
         if (opts.print_final_newline) {
             try printch(Char.newline, writer);
         }
+    }
+
+    /// allows you to seamlessly mix blox and std.fmt code
+    pub fn fmt(
+        self: *const Self,
+        div: Div,
+        comptime opts: WriteOptions,
+    ) FormattableDiv(opts) {
+        return .{ .mason = self, .div = div };
+    }
+
+    fn FormattableDiv(comptime opts: WriteOptions) type {
+        return struct {
+            mason: *const Mason,
+            div: Div,
+
+            pub fn format(
+                self: @This(),
+                comptime _: []const u8,
+                _: std.fmt.FormatOptions,
+                writer: anytype,
+            ) @TypeOf(writer).Error!void {
+                self.mason.write(self.div, writer, opts) catch |e| {
+                    // check if this error can propagate
+                    const name = @errorName(e);
+                    const E = @TypeOf(writer).Error;
+                    const errors: []const std.builtin.Type.Error =
+                        @typeInfo(E).ErrorSet orelse &.{};
+
+                    inline for (errors) |err| {
+                        if (std.mem.eql(u8, err.name, name)) {
+                            return @as(E, @errSetCast(e));
+                        }
+                    }
+
+                    // the error can't propagate
+                    std.debug.panic(
+                        "error in FormattableDiv.format: {s}",
+                        .{name}
+                    );
+                };
+            }
+        };
     }
 };
 
@@ -195,7 +238,7 @@ const Region = union(Kind) {
     fn bake(
         self: *const Self,
         mason: *const Mason,
-    ) Error!FormattedText {
+    ) Allocator.Error!FormattedText {
         return switch (self.*) {
             .spacer => |s| try FormattedText.initSpacer(mason.ally, s),
             .pre => |ft| try ft.clone(mason.ally),
@@ -295,7 +338,7 @@ const Box = struct {
         return final;
     }
 
-    fn bake(self: Self, mason: *const Mason) Error!FormattedText {
+    fn bake(self: Self, mason: *const Mason) Allocator.Error!FormattedText {
         const canvas = try FormattedText.initEmpty(mason.ally, self.dims);
 
         switch (self.opts.direction) {
@@ -498,15 +541,28 @@ const FormattedText = struct {
         );
 
         for (crop.inner[1]..crop.outer[1]) |row| {
+            // get src
             const src_line = src.getLine(row);
-            const src_slice = src_line[crop.inner[0]..crop.outer[0]];
+            const src_start = crop.inner[0];
+            const src_stop = @min(src_line.len, crop.outer[0]);
+            const src_slice = src_line[src_start..src_stop];
 
+            // get dst
             const dst_line = dst.getLine(dst_offset[1] + row);
             const dst_start = dst_offset[0];
-            const dst_stop = dst_offset[0] + (crop.outer[0] - crop.inner[0]);
+            const dst_crop = dst_offset[0] + (crop.outer[0] - crop.inner[0]);
+            const dst_stop = @min(dst_line.len, dst_crop);
             const dst_slice = dst_line[dst_start..dst_stop];
 
-            @memcpy(dst_slice, src_slice);
+            // write
+            if (src_slice.len == dst_slice.len) {
+                @memcpy(dst_slice, src_slice);
+            } else if (src_slice.len < dst_slice.len) {
+                @memcpy(dst_slice[0..src_slice.len], src_slice);
+                @memset(dst_slice[src_slice.len..], Char.empty);
+            } else {
+                std.debug.assert(false);
+            }
         }
     }
 
